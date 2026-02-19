@@ -1,6 +1,8 @@
 import telebot
 import yt_dlp
 import os
+import requests
+import re
 from flask import Flask
 from threading import Thread
 
@@ -15,8 +17,8 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# Configuração do Bot (Cole seu token na linha abaixo, entre as aspas)
-TOKEN = '8405851563:AAFm492bdi0Pko4VcoPWvekn57vxUR5XSPo' 
+# --- COLOQUE SEU TOKEN DO TELEGRAM AQUI ---
+TOKEN = '8405851563:AAFm492bdi0Pko4VcoPWvekn57vxUR5XSPo'
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start', 'help'])
@@ -27,18 +29,55 @@ def send_welcome(message):
 def download_video(message):
     url = message.text
     chat_id = message.chat.id
-    msg = bot.send_message(chat_id, "⏳ Processando o vídeo... Aguarde.")
-    
+    msg = bot.send_message(chat_id, "⏳ Analisando o link...")
+
+    # --- HABILIDADE NOVA: DETETIVE DE SHOPEE ---
+    # Se a palavra 'shopee' ou 'shp.ee' estiver no link, ele usa o modo detetive
+    if "shopee" in url or "shp.ee" in url:
+        try:
+            bot.edit_message_text("🕵️ Procurando o vídeo escondido na Shopee...", chat_id, msg.message_id)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+            # O bot entra no site
+            site = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+            
+            # Procura no código fonte qualquer link que termine em .mp4
+            links_brutos = re.findall(r'(https?[^\s"\'<>]+?\.mp4[^\s"\'<>]*)', site.text)
+            
+            if links_brutos:
+                # Limpa o link e prepara o download
+                mp4_url = links_brutos[0].replace('\\/', '/')
+                bot.edit_message_text("✅ Encontrei o arquivo bruto! Baixando...", chat_id, msg.message_id)
+                
+                # Baixa o vídeo direto do servidor da Shopee
+                video_data = requests.get(mp4_url, headers=headers)
+                nome_arquivo = f"shopee_{chat_id}.mp4"
+                
+                with open(nome_arquivo, 'wb') as f:
+                    f.write(video_data.content)
+                
+                # Envia para o Telegram
+                with open(nome_arquivo, 'rb') as video_file:
+                    bot.send_video(chat_id, video_file, caption="Aqui está o seu vídeo da Shopee! 🎥")
+                
+                os.remove(nome_arquivo)
+                bot.delete_message(chat_id, msg.message_id)
+                return # Termina a função com sucesso e não precisa usar o yt-dlp
+                
+        except Exception as e:
+            print("Modo detetive falhou:", e)
+            # Se o modo detetive falhar, ele segue a vida e tenta o yt-dlp abaixo
+
+    # --- MODO PADRÃO (yt-dlp) PARA YOUTUBE, TIKTOK, ETC ---
+    bot.edit_message_text("⏳ Processando pelo sistema padrão...", chat_id, msg.message_id)
     ydl_opts = {
         'format': 'best',
         'outtmpl': f'video_{chat_id}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Sec-Fetch-Mode': 'navigate',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
     }
     
@@ -50,12 +89,12 @@ def download_video(message):
         with open(filename, 'rb') as video:
             bot.send_video(chat_id, video, caption="Vídeo baixado com sucesso! ✅")
             
-        os.remove(filename) # Apaga o arquivo da nuvem após enviar para não lotar o espaço
+        os.remove(filename)
         bot.delete_message(chat_id, msg.message_id)
         
     except Exception as e:
-        bot.edit_message_text("❌ Desculpe, não consegui baixar esse vídeo. Verifique se o link está correto ou se o site bloqueou o acesso.", chat_id, msg.message_id)
-
-# Liga o sistema
-keep_alive()
-bot.polling(non_stop=True)
+        erro_msg = str(e)
+        if "Unsupported URL" in erro_msg:
+            bot.edit_message_text("❌ A Shopee escondeu muito bem esse vídeo. Meu sistema de detetive não conseguiu achá-lo no código da página.", chat_id, msg.message_id)
+        else:
+            bot.edit_message_text("❌ Erro ao baixar o vídeo. Tente novamente mais tarde.", chat_id, msg.message_id)
